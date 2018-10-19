@@ -32,6 +32,7 @@ namespace EffekseerRendererDX12
 		heapDesc.NumDescriptors = (UINT)renderer->GetSquareMaxCount() * 2 * 2;
 
 		static int shaderNum = 0;
+		static int allBufferSize = 0;
 		++shaderNum;
 
 		auto result = renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_constantBufferDescriptorHeap));
@@ -85,15 +86,13 @@ namespace EffekseerRendererDX12
 		resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
 		D3D12_CONSTANT_BUFFER_VIEW_DESC cbv{};
-		cbv.SizeInBytes = 0x100;
+		cbv.SizeInBytes = resourceDesc.Width;
 		auto heapCPUHandle = m_constantBufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 		auto device = renderer->GetDevice();
 		m_heapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 		for (int i = 0; i < bufferNum; ++i)
 		{
-			static int allBufferNum = 0;
-			++allBufferNum;
 
 			auto result = GetRenderer()->GetDevice()->CreateCommittedResource(&heapPropertie,
 				D3D12_HEAP_FLAG_NONE,
@@ -115,6 +114,8 @@ namespace EffekseerRendererDX12
 			device->CreateConstantBufferView(&cbv, heapCPUHandle);
 			heapCPUHandle.ptr += m_heapIncrementSize;
 
+			allBufferSize += cbv.SizeInBytes;
+
 			result = GetRenderer()->GetDevice()->CreateCommittedResource(&heapPropertie,
 				D3D12_HEAP_FLAG_NONE,
 				&resourceDesc,
@@ -135,7 +136,10 @@ namespace EffekseerRendererDX12
 			device->CreateConstantBufferView(&cbv, heapCPUHandle);
 			heapCPUHandle.ptr += m_heapIncrementSize;
 
+
+			allBufferSize += cbv.SizeInBytes;
 		}
+
 		//ルートシグネチャの作成
 		{
 			
