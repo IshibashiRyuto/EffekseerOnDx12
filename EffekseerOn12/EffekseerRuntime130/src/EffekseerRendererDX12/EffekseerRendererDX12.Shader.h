@@ -19,10 +19,8 @@ namespace EffekseerRendererDX12
 		D3D12_INPUT_LAYOUT_DESC m_vertexDeclaration;
 		
 
-		void*					m_vertexConstantBuffer;
-		void*					m_pixelConstantBuffer;
-		void*					m_vertexConstantBufferStart;
-		void*					m_pixelConstantBufferStart;
+		std::vector<void*>		m_vertexConstantBuffers;
+		std::vector<void*>		m_pixelConstantBuffers;
 
 		int32_t					m_vertexRegisterCount;
 		int32_t					m_pixelRegisterCount;
@@ -32,14 +30,19 @@ namespace EffekseerRendererDX12
 
 		int32_t					m_srvStartRootParamIdx{};
 
+		int32_t					m_bufferIndex;
+		int32_t					m_textureResourceIndex;
+		int32_t					m_constantBufferViewEndIndex;
+
+		UINT					m_heapIncrementSize;
+
 		ComPtr<ID3D12DescriptorHeap> m_constantBufferDescriptorHeap;
+		ComPtr<ID3D12DescriptorHeap> m_shaderResourceDescriptorHeap;
 		D3D12_CPU_DESCRIPTOR_HANDLE m_handle;
 		D3D12_GPU_DESCRIPTOR_HANDLE m_GPUHandle;
 
-		ComPtr<ID3D12Resource> m_constantBufferToVS;
-		D3D12_CONSTANT_BUFFER_VIEW_DESC m_cbvToVS;
-		ComPtr<ID3D12Resource> m_constantBufferToPS;
-		D3D12_CONSTANT_BUFFER_VIEW_DESC m_cbvToPS;
+		std::vector<ComPtr<ID3D12Resource>> m_constantBuffersToVS;
+		std::vector<ComPtr<ID3D12Resource>> m_constantBuffersToPS;
 
 		ComPtr<ID3D12RootSignature> m_rootSignature;
 
@@ -72,8 +75,8 @@ namespace EffekseerRendererDX12
 		void SetVertexConstantBufferSize(int32_t size);
 		void SetPixelConstantBufferSize(int32_t size);
 
-		void* GetVertexConstantBuffer() { return m_vertexConstantBuffer; }
-		void* GetPixelConstantBuffer() { return m_pixelConstantBuffer; }
+		void* GetVertexConstantBuffer() { return m_vertexConstantBuffers[m_bufferIndex]; }
+		void* GetPixelConstantBuffer() { return m_pixelConstantBuffers[m_bufferIndex]; }
 
 		void SetVertexRegisterCount(int32_t count) { m_vertexRegisterCount = count; }
 		void SetPixelRegisterCount(int32_t count) { m_pixelRegisterCount = count; }

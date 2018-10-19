@@ -15,10 +15,6 @@ namespace EffekseerRendererDX12
 		, m_pixelShader(pixelShader)
 		, m_vertexDeclaration(vertexDeclaration)
 		, m_InputElements(inputElements)
-		, m_constantBufferToVS(nullptr)
-		, m_constantBufferToPS(nullptr)
-		, m_vertexConstantBuffer(nullptr)
-		, m_pixelConstantBuffer(nullptr)
 		, m_vertexRegisterCount(0)
 		, m_pixelRegisterCount(0)
 		, m_vertexBufferSize(0)
@@ -28,18 +24,49 @@ namespace EffekseerRendererDX12
 		, m_handle(D3D12_CPU_DESCRIPTOR_HANDLE{})
 	{
 		// ヒープの作成
-		// squareCount * 2で事足りるとは思うが……
+		// 定数バッファヒープはsquareCount * 2 (三角形の数) *2 (VSとPS)分作成
+		// シェーダリソースヒープはsquareCount * 2 (三角形の数) *2 (テクスチャ2枚分)
 		D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
 		heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		heapDesc.NumDescriptors = (UINT)renderer->GetSquareMaxCount()*2;
-		renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_constantBufferDescriptorHeap));
+		heapDesc.NumDescriptors = (UINT)renderer->GetSquareMaxCount() * 2 * 2;
+
+		static int shaderNum = 0;
+		++shaderNum;
+
+		auto result = renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_constantBufferDescriptorHeap));
+		if(FAILED(result))
+		{
+#ifdef _DEBUG
+			MessageBox(nullptr, TEXT("Failed Create by ConstantBufferDescHeap."), TEXT("Failed"), MB_OK);
+#endif
+			return;
+		}
+		heapDesc.NumDescriptors = (UINT)renderer->GetSquareMaxCount() * 2 * 2;
+		result = renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_shaderResourceDescriptorHeap));
+
+		if (FAILED(result))
+		{
+#ifdef _DEBUG
+			MessageBox(nullptr, TEXT("Failed Create by ConstantBufferDescHeap."), TEXT("Failed"), MB_OK);
+#endif
+			return;
+		}
 
 		m_handle = m_constantBufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
 		m_GPUHandle = m_constantBufferDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 
+
 		// コンスタントバッファの作成
-		// とりあえずこっちもヒープと同じ数だけ分作成する
+		// 三角形の数分(squareCount * 2)作成する
+		// サイズは(現状)256byte固定
+		// (それ以上のデータを送ることがないため)
+		int bufferNum = (int)renderer->GetSquareMaxCount() * 2;
+		m_constantBuffersToVS.resize(bufferNum);
+		m_constantBuffersToPS.resize(bufferNum);
+		m_vertexConstantBuffers.resize(bufferNum);
+		m_pixelConstantBuffers.resize(bufferNum);
+
 		D3D12_HEAP_PROPERTIES heapPropertie{};
 		heapPropertie.Type = D3D12_HEAP_TYPE_UPLOAD;
 		heapPropertie.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
@@ -49,7 +76,7 @@ namespace EffekseerRendererDX12
 
 		D3D12_RESOURCE_DESC resourceDesc{};
 		resourceDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-		resourceDesc.Width = 0x100 * ( (UINT)renderer->GetSquareMaxCount() * 2 );
+		resourceDesc.Width = 0x100;
 		resourceDesc.Height = 1;
 		resourceDesc.DepthOrArraySize = 1;
 		resourceDesc.SampleDesc.Count = 1;
@@ -57,40 +84,58 @@ namespace EffekseerRendererDX12
 		resourceDesc.MipLevels = 1;
 		resourceDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-		if (FAILED(GetRenderer()->GetDevice()->CreateCommittedResource(&heapPropertie,
-			D3D12_HEAP_FLAG_NONE,
-			&resourceDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ,
-			nullptr,
-			IID_PPV_ARGS(&m_constantBufferToVS))))
+		D3D12_CONSTANT_BUFFER_VIEW_DESC cbv{};
+		cbv.SizeInBytes = 0x100;
+		auto heapCPUHandle = m_constantBufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+		auto device = renderer->GetDevice();
+		m_heapIncrementSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+		for (int i = 0; i < bufferNum; ++i)
 		{
+			static int allBufferNum = 0;
+			++allBufferNum;
+
+			auto result = GetRenderer()->GetDevice()->CreateCommittedResource(&heapPropertie,
+				D3D12_HEAP_FLAG_NONE,
+				&resourceDesc,
+				D3D12_RESOURCE_STATE_GENERIC_READ,
+				nullptr,
+				IID_PPV_ARGS(&m_constantBuffersToVS[i]));
+
+			if (FAILED(result))
+			{
 #ifdef _DEBUG
-			MessageBox(nullptr, TEXT("Failed Create by VertexConstantBuffer."), TEXT("Failed"), MB_OK);
+				MessageBox(nullptr, TEXT("Failed Create by VertexConstantBuffer."), TEXT("Failed"), MB_OK);
 #endif
-			return;
-		}
+				return;
+			}
 
-		if (FAILED(GetRenderer()->GetDevice()->CreateCommittedResource(&heapPropertie,
-			D3D12_HEAP_FLAG_NONE,
-			&resourceDesc,
-			D3D12_RESOURCE_STATE_GENERIC_READ,
-			nullptr,
-			IID_PPV_ARGS(&m_constantBufferToPS))))
-		{
+			m_constantBuffersToVS[i]->Map(0, nullptr, (void**)(&m_vertexConstantBuffers[i]));
+			cbv.BufferLocation = m_constantBuffersToVS[i]->GetGPUVirtualAddress();
+			device->CreateConstantBufferView(&cbv, heapCPUHandle);
+			heapCPUHandle.ptr += m_heapIncrementSize;
+
+			result = GetRenderer()->GetDevice()->CreateCommittedResource(&heapPropertie,
+				D3D12_HEAP_FLAG_NONE,
+				&resourceDesc,
+				D3D12_RESOURCE_STATE_GENERIC_READ,
+				nullptr,
+				IID_PPV_ARGS(&m_constantBuffersToPS[i]));
+			if (FAILED(result))
+			{
 
 #ifdef _DEBUG
-			MessageBox(nullptr, TEXT("Failed Create by PixelConstantBuffer."), TEXT("Failed"), MB_OK);
+				MessageBox(nullptr, TEXT("Failed Create by PixelConstantBuffer."), TEXT("Failed"), MB_OK);
 #endif
-			return;
+				return;
+			}
+
+			m_constantBuffersToPS[i]->Map(0, nullptr, (void**)(&m_pixelConstantBuffers[i]));
+			cbv.BufferLocation = m_constantBuffersToPS[i]->GetGPUVirtualAddress();
+			device->CreateConstantBufferView(&cbv, heapCPUHandle);
+			heapCPUHandle.ptr += m_heapIncrementSize;
+
 		}
-
-		m_cbvToVS.BufferLocation = m_constantBufferToVS->GetGPUVirtualAddress();
-		m_cbvToPS.BufferLocation = m_constantBufferToPS->GetGPUVirtualAddress();
-
-		m_constantBufferToVS->Map(0, nullptr, (void**)(&m_vertexConstantBufferStart));
-		m_constantBufferToPS->Map(0, nullptr, (void**)(&m_pixelConstantBufferStart));
-
-
 		//ルートシグネチャの作成
 		{
 			
@@ -253,69 +298,52 @@ namespace EffekseerRendererDX12
 	void Shader::SetVertexConstantBufferSize(int32_t size)
 	{
 		m_vertexBufferSize = (size + 0xff) & ~0xff;
-		m_cbvToVS.SizeInBytes = m_vertexBufferSize;
 	}
 
 	void Shader::SetPixelConstantBufferSize(int32_t size)
 	{
 		m_pixelBufferSize = (size + 0xff) & ~0xff;
-		m_cbvToPS.SizeInBytes = m_vertexBufferSize;
 	}
 
 	void Shader::SetConstantBuffer()
 	{
+		auto gpuHandle = m_constantBufferDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		gpuHandle.ptr += m_heapIncrementSize * m_bufferIndex * 2;
+
 		if (m_vertexRegisterCount > 0)
 		{
-
-			GetRenderer()->GetDevice()->CreateConstantBufferView(&m_cbvToVS, m_handle);
-
 			// デスクリプタをコマンドに積む処理
-			GetRenderer()->GetCommandList()->SetGraphicsRootDescriptorTable(4, m_GPUHandle);
-
-			m_vertexConstantBuffer = (uint8_t*)m_vertexConstantBuffer + m_vertexBufferSize;
-			m_cbvToVS.BufferLocation += m_vertexBufferSize;
-			m_handle.ptr += GetRenderer()->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-			m_GPUHandle.ptr += GetRenderer()->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+			GetRenderer()->GetCommandList()->SetGraphicsRootDescriptorTable(4, gpuHandle);
 		}
+
+		gpuHandle.ptr += m_heapIncrementSize;
 
 		if (m_pixelRegisterCount > 0)
 		{
-			GetRenderer()->GetDevice()->CreateConstantBufferView(&m_cbvToPS, m_handle);
-
 			// デスクリプタをコマンドに積む処理
-			GetRenderer()->GetCommandList()->SetGraphicsRootDescriptorTable(5, m_GPUHandle);
-			
-
-			m_pixelConstantBuffer = (uint8_t*)m_pixelConstantBuffer + m_pixelBufferSize;
-			m_cbvToPS.BufferLocation += m_pixelBufferSize;
-			m_handle.ptr += GetRenderer()->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-			m_GPUHandle.ptr += GetRenderer()->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+			GetRenderer()->GetCommandList()->SetGraphicsRootDescriptorTable(5, gpuHandle);
 		}
+		++m_bufferIndex;
 	}
 
 	void Shader::ResetConstantBuffer()
 	{
-		m_vertexConstantBuffer = m_vertexConstantBufferStart;
-		m_pixelConstantBuffer = m_pixelConstantBufferStart;
-
-		m_cbvToVS.BufferLocation = m_constantBufferToVS->GetGPUVirtualAddress();
-		m_cbvToPS.BufferLocation = m_constantBufferToPS->GetGPUVirtualAddress();
-
-		m_handle = m_constantBufferDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-		m_GPUHandle = m_constantBufferDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		m_bufferIndex = 0;
+		m_textureResourceIndex = 0;
 	}
 
 	void Shader::SetTextureData(EffekseerRendererDX12::TextureData * textureData, int32_t rootParameterOffset)
 	{
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = textureData->GetShaderResourceView();
-		GetRenderer()->GetDevice()->CreateShaderResourceView(textureData->GetResource(), &srvDesc, m_handle);
-		// デスクリプタをコマンドに積む処理
 
-		GetRenderer()->GetCommandList()->SetGraphicsRootDescriptorTable(m_srvStartRootParamIdx + rootParameterOffset, m_GPUHandle);
+		auto cpuHandle = m_shaderResourceDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+		auto gpuHandle = m_shaderResourceDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+		cpuHandle.ptr += m_heapIncrementSize * m_textureResourceIndex;
+		gpuHandle.ptr += m_heapIncrementSize * m_textureResourceIndex;
 
-		m_handle.ptr += GetRenderer()->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-		m_GPUHandle.ptr += GetRenderer()->GetDevice()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
+		GetRenderer()->GetDevice()->CreateShaderResourceView(textureData->GetResource(), &srvDesc, cpuHandle);
+		GetRenderer()->GetCommandList()->SetGraphicsRootDescriptorTable(m_srvStartRootParamIdx + rootParameterOffset, gpuHandle);
+		++m_textureResourceIndex;
 	}
 
 	void Shader::CreateRootSignature(D3D12_ROOT_PARAMETER *rootParam, int32_t size)
